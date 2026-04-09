@@ -1,0 +1,41 @@
+services:
+  app:
+    build:
+      context: ./app
+    env_file:
+      - ./app/.env
+    volumes:
+      - ./app/src:/app/src
+    depends_on:
+      - rabbitmq
+      - database
+    expose:
+      - "8000"
+
+  web-proxy:
+    build:
+      context: ./web-proxy
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - ./data/rabbitmq:/var/lib/rabbitmq
+    restart: unless-stopped
+
+  database:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ml_service
+      POSTGRES_USER: ml_user
+      POSTGRES_PASSWORD: ml_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data

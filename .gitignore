@@ -1,0 +1,11 @@
+data/rabbitmq/*
+!data/rabbitmq/.gitkeep
+
+data/postgres/*
+!data/postgres/.gitkeep
+
+.env
+
+nginx.conf
+
+docker-compose.yml
