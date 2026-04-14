@@ -1,12 +1,15 @@
 import json
-import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+from ml_service.config import get_settings
+from ml_service.database import get_engine, wait_for_database
+from ml_service.init_db import initialize_database
 
-APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
-APP_PORT = int(os.getenv("APP_PORT", "8000"))
-APP_NAME = os.getenv("APP_NAME", "vulnrank")
-APP_ENV = os.getenv("APP_ENV", "development")
+SETTINGS = get_settings()
+APP_HOST = SETTINGS.app_host
+APP_PORT = SETTINGS.app_port
+APP_NAME = SETTINGS.app_name
+APP_ENV = SETTINGS.app_env
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -27,6 +30,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "status": "ok",
                     "service": APP_NAME,
                     "environment": APP_ENV,
+                    "database": "initialized",
                 },
             )
             return
@@ -34,7 +38,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         self._send_json(
             200,
             {
-                "message": "service is running",
+                "message": "ML service app stub is running",
                 "service": APP_NAME,
                 "environment": APP_ENV,
             },
@@ -45,6 +49,10 @@ class RequestHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    engine = get_engine()
+    wait_for_database(engine)
+    initialize_database(engine=engine)
+
     server = HTTPServer((APP_HOST, APP_PORT), RequestHandler)
     print(f"Starting {APP_NAME} on {APP_HOST}:{APP_PORT}")
     server.serve_forever()

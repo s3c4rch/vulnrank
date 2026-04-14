@@ -1,11 +1,8 @@
 data/rabbitmq/*
 !data/rabbitmq/.gitkeep
 
-data/postgres/*
-!data/postgres/.gitkeep
-
-.env
-
-nginx.conf
-
+app/.env
+app/Dockerfile
+web-proxy/Dockerfile
+web-proxy/nginx.conf
 docker-compose.yml

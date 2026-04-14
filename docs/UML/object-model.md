@@ -44,11 +44,6 @@ abstract class User {
   - role: UserRole
   - balance: CreditBalance
   - createdAt: DateTime
-
-  + getBalance(): decimal
-  + canAfford(amount: decimal): boolean
-  + addCredits(amount: decimal): void
-  + chargeCredits(amount: decimal): void
 }
 
 class ClientUser extends User {
@@ -63,43 +58,6 @@ class AdminUser extends User {
   + approveTopUp(transaction: TopUpTransaction): void
   + rejectTopUp(transaction: TopUpTransaction, reason: string): void
   + viewUserTransactions(userId: UUID): List<Transaction>
-}
-
-### balance & transactions
-class CreditBalance {
-  - amount: decimal
-
-  + getAmount(): decimal
-  + increase(amount: decimal): void
-  + decrease(amount: decimal): void
-  + hasEnough(amount: decimal): boolean
-}
-
-abstract class Transaction {
-  - id: UUID
-  - type: TransactionType
-  - amount: decimal
-  - status: TransactionStatus
-  - user: User
-  - relatedTask: MLTask?
-  - createdAt: DateTime
-
-  + applyTo(user: User): void
-  + cancel(reason: string): void
-}
-
-class TopUpTransaction extends Transaction {
-  - reviewedBy: AdminUser?
-  - reviewedAt: DateTime?
-  - reviewComment: string?
-
-  + approve(admin: AdminUser): void
-  + reject(admin: AdminUser, reason: string): void
-  + applyTo(user: User): void
-}
-
-class PredictionChargeTransaction extends Transaction {
-  + applyTo(user: User): void
 }
 
 ### ml
@@ -175,6 +133,45 @@ class PredictionItem {
   - confidence: float
 
   + getPredictedPriority(): PriorityClass
+}
+
+### balance & transactions
+class CreditBalance {
+  - id: UUID
+  - user: User
+  - amount: decimal
+
+  + getAmount(): decimal
+  + canAfford(amount: decimal): boolean
+  + increase(amount: decimal): void
+  + decrease(amount: decimal): void
+}
+
+abstract class Transaction {
+  - id: UUID
+  - type: TransactionType
+  - amount: decimal
+  - status: TransactionStatus
+  - user: User
+  - relatedTask: MLTask?
+  - createdAt: DateTime
+
+  + applyTo(user: User): void
+  + cancel(reason: string): void
+}
+
+class TopUpTransaction extends Transaction {
+  - reviewedBy: AdminUser?
+  - reviewedAt: DateTime?
+  - reviewComment: string?
+
+  + approve(admin: AdminUser): void
+  + reject(admin: AdminUser, reason: string): void
+  + applyTo(user: User): void
+}
+
+class PredictionChargeTransaction extends Transaction {
+  + applyTo(user: User): void
 }
 
 ### history
