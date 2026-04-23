@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from ml_service.models import (
+    AuthSession,
     Balance,
     MLModel,
     MLTask,
@@ -19,6 +20,7 @@ from ml_service.models import (
     UserRole,
     utcnow,
 )
+from ml_service.security import generate_auth_token, hash_password, verify_password
 
 
 TWOPLACES = Decimal("0.01")
@@ -38,6 +40,10 @@ class UserAlreadyExistsError(DomainError):
 
 class InsufficientBalanceError(DomainError):
     """Raised when balance is not enough for debit."""
+
+
+class AuthenticationError(DomainError):
+    """Raised when authentication fails."""
 
 
 def normalize_amount(raw_amount: Decimal | int | float | str) -> Decimal:
@@ -100,6 +106,46 @@ class UserService:
     @staticmethod
     def get_user_by_email(session: Session, email: str) -> User | None:
         return session.scalar(select(User).where(User.email == email))
+
+
+class AuthService:
+    @staticmethod
+    def register_user(session: Session, email: str, password: str) -> User:
+        return UserService.create_user(
+            session,
+            email=email,
+            password_hash=hash_password(password),
+            role=UserRole.USER,
+        )
+
+    @staticmethod
+    def create_session(session: Session, user_id: str) -> AuthSession:
+        auth_session = AuthSession(user_id=user_id, token=generate_auth_token())
+        session.add(auth_session)
+        session.commit()
+        session.refresh(auth_session)
+        return auth_session
+
+    @staticmethod
+    def login(session: Session, email: str, password: str) -> tuple[User, AuthSession]:
+        user = UserService.get_user_by_email(session, email)
+        if user is None or not verify_password(password, user.password_hash):
+            raise AuthenticationError("Invalid email or password")
+
+        auth_session = AuthService.create_session(session, user.id)
+        return UserService.get_user(session, user.id), auth_session
+
+    @staticmethod
+    def get_user_by_token(session: Session, token: str) -> User:
+        statement = (
+            select(AuthSession)
+            .where(AuthSession.token == token)
+            .options(joinedload(AuthSession.user).joinedload(User.balance))
+        )
+        auth_session = session.execute(statement).unique().scalar_one_or_none()
+        if auth_session is None:
+            raise AuthenticationError("Invalid authentication token")
+        return UserService.get_user(session, auth_session.user_id)
 
 
 class BalanceService:
@@ -209,8 +255,72 @@ class MLModelService:
         session.refresh(model)
         return model
 
+    @staticmethod
+    def get_model(session: Session, model_id: str) -> MLModel:
+        model = session.get(MLModel, model_id)
+        if model is None:
+            raise EntityNotFoundError(f"ML model {model_id} was not found")
+        return model
+
+    @staticmethod
+    def get_default_active_model(session: Session) -> MLModel:
+        statement = (
+            select(MLModel)
+            .where(MLModel.is_active.is_(True))
+            .order_by(MLModel.created_at.desc(), MLModel.version.desc())
+        )
+        model = session.scalars(statement).first()
+        if model is None:
+            raise EntityNotFoundError("No active ML model is available")
+        return model
+
 
 class PredictionService:
+    @staticmethod
+    def build_mock_predictions(
+        records: list[dict[str, object]],
+    ) -> tuple[PriorityClass, float, list[dict[str, object]]]:
+        predictions: list[dict[str, object]] = []
+        priorities: list[PriorityClass] = []
+        confidences: list[float] = []
+
+        for index, record in enumerate(records):
+            severity = str(record.get("severity_reported", "low")).lower()
+            cvss_score = float(record.get("cvss_score") or 0.0)
+            has_cve = bool(record.get("has_cve", False))
+
+            if severity == "critical" or severity == "high" or cvss_score >= 8.0:
+                priority = PriorityClass.HIGH
+                confidence = 0.93 if has_cve or cvss_score >= 9.0 else 0.88
+            elif severity == "medium" or cvss_score >= 5.0:
+                priority = PriorityClass.MEDIUM
+                confidence = 0.79
+            else:
+                priority = PriorityClass.LOW
+                confidence = 0.68
+
+            priorities.append(priority)
+            confidences.append(confidence)
+            predictions.append(
+                {
+                    "record_index": index,
+                    "finding_type": record.get("finding_type"),
+                    "predicted_priority": priority.value,
+                    "confidence": round(confidence, 2),
+                }
+            )
+
+        overall_priority = max(
+            priorities,
+            key=lambda item: {
+                PriorityClass.LOW: 1,
+                PriorityClass.MEDIUM: 2,
+                PriorityClass.HIGH: 3,
+            }[item],
+        )
+        average_confidence = round(sum(confidences) / len(confidences), 2)
+        return overall_priority, average_confidence, predictions
+
     @staticmethod
     def record_prediction(
         session: Session,

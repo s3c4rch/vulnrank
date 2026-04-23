@@ -52,7 +52,7 @@ def wait_for_database(
             with metadata_engine.connect() as connection:
                 connection.execute(text("SELECT 1"))
             return
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover - retry branch depends on runtime timing
             last_error = exc
             sleep(wait_delay)
 

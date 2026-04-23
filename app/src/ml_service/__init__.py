@@ -1,1 +1,1 @@
-"""App package for backend"""
+"""Application package for the ML service backend."""

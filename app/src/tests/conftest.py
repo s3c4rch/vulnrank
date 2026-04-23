@@ -1,7 +1,10 @@
+from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
 import pytest
 
+from ml_service.api import create_app
 from ml_service.database import Base, make_engine, make_session_factory
+from ml_service.init_db import initialize_database
 
 
 @pytest.fixture
@@ -25,3 +28,15 @@ def session_factory():
 def session(session_factory):
     with session_factory() as db_session:
         yield db_session
+
+
+@pytest.fixture
+def app(session_factory):
+    initialize_database(session_factory=session_factory)
+    return create_app(session_factory=session_factory, initialize_on_startup=False)
+
+
+@pytest.fixture
+def client(app):
+    with TestClient(app) as test_client:
+        yield test_client

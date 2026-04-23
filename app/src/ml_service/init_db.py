@@ -6,20 +6,21 @@ from sqlalchemy.orm import sessionmaker
 
 from ml_service.database import create_schema, get_engine, get_session_factory
 from ml_service.models import MLModel, Transaction, TransactionType, User, UserRole
+from ml_service.security import hash_password
 from ml_service.services import BalanceService, MLModelService, UserService
 
 
 DEMO_USERS = (
     {
         "email": "demo-user@example.com",
-        "password_hash": "demo-user-password-hash",
+        "password": "demo-user-password",
         "role": UserRole.USER,
         "initial_balance": Decimal("120.00"),
         "seed_marker": "seed:demo-user:balance",
     },
     {
         "email": "demo-admin@example.com",
-        "password_hash": "demo-admin-password-hash",
+        "password": "demo-admin-password",
         "role": UserRole.ADMIN,
         "initial_balance": Decimal("300.00"),
         "seed_marker": "seed:demo-admin:balance",
@@ -53,14 +54,20 @@ def initialize_database(
     with factory() as session:
         for demo_user in DEMO_USERS:
             user = session.scalar(select(User).where(User.email == demo_user["email"]))
+            expected_password_hash = hash_password(demo_user["password"])
             if user is None:
                 user = UserService.create_user(
                     session,
                     email=demo_user["email"],
-                    password_hash=demo_user["password_hash"],
+                    password_hash=expected_password_hash,
                     role=demo_user["role"],
                     initial_balance=Decimal("0.00"),
                 )
+            else:
+                user.password_hash = expected_password_hash
+                user.role = demo_user["role"]
+                session.commit()
+                session.refresh(user)
 
             existing_seed = session.scalar(
                 select(Transaction).where(

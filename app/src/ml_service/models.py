@@ -68,6 +68,10 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    auth_sessions: Mapped[list["AuthSession"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     tasks: Mapped[list["MLTask"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -151,3 +155,14 @@ class Transaction(Base):
 
     user: Mapped[User] = relationship(back_populates="transactions")
     task: Mapped[MLTask | None] = relationship(back_populates="transactions")
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    user: Mapped[User] = relationship(back_populates="auth_sessions")

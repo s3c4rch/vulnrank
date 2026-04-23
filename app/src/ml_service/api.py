@@ -1,0 +1,348 @@
+from __future__ import annotations
+
+from collections.abc import Generator
+from decimal import Decimal
+from typing import Any
+
+from fastapi import Depends, FastAPI, Security, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import ValidationError
+from sqlalchemy.orm import Session, sessionmaker
+
+from ml_service.database import get_engine, get_session_factory, wait_for_database
+from ml_service.init_db import initialize_database
+from ml_service.models import MLTask, Transaction, User
+from ml_service.schemas import (
+    AuthResponse,
+    BalanceOperationResponse,
+    BalanceView,
+    ErrorResponse,
+    FindingRecordInput,
+    HistoryResponse,
+    InvalidRecordView,
+    LoginRequest,
+    PredictionHistoryItem,
+    PredictionRequest,
+    PredictionResponse,
+    ProcessedRecordPredictionView,
+    RegisterRequest,
+    TopUpRequest,
+    TransactionHistoryResponse,
+    TransactionView,
+    UserView,
+)
+from ml_service.services import (
+    AuthService,
+    AuthenticationError,
+    BalanceService,
+    EntityNotFoundError,
+    InsufficientBalanceError,
+    MLModelService,
+    PredictionService,
+    TransactionService,
+    UserAlreadyExistsError,
+    UserService,
+)
+
+
+class ApiError(Exception):
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        details: Any | None = None,
+    ) -> None:
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+        self.details = details
+        super().__init__(message)
+
+
+def build_error_response(
+    status_code: int,
+    code: str,
+    message: str,
+    details: Any | None = None,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": {
+                "code": code,
+                "message": message,
+                "details": details,
+            }
+        },
+    )
+
+
+def serialize_balance(user: User) -> BalanceView:
+    return BalanceView(
+        amount=Decimal(str(user.balance.amount)),
+        updated_at=user.balance.updated_at,
+    )
+
+
+def serialize_user(user: User) -> UserView:
+    return UserView(
+        id=user.id,
+        email=user.email,
+        role=user.role.value,
+        created_at=user.created_at,
+        balance=serialize_balance(user),
+    )
+
+
+def serialize_transaction(transaction: Transaction) -> TransactionView:
+    return TransactionView(
+        id=transaction.id,
+        type=transaction.type.value,
+        status=transaction.status.value,
+        amount=Decimal(str(transaction.amount)),
+        task_id=transaction.task_id,
+        review_comment=transaction.review_comment,
+        created_at=transaction.created_at,
+    )
+
+
+def serialize_prediction_history_item(task: MLTask) -> PredictionHistoryItem:
+    return PredictionHistoryItem(
+        task_id=task.id,
+        model_id=task.model.id,
+        model_name=task.model.name,
+        model_version=task.model.version,
+        status=task.status.value,
+        predicted_priority=task.result.predicted_priority.value if task.result else None,
+        confidence=task.result.confidence if task.result else None,
+        processed_count=task.result.processed_count if task.result else None,
+        rejected_count=task.result.rejected_count if task.result else None,
+        spent_credits=Decimal(str(task.spent_credits)),
+        created_at=task.created_at,
+        finished_at=task.finished_at,
+    )
+
+
+def create_app(
+    session_factory: sessionmaker | None = None,
+    initialize_on_startup: bool = True,
+) -> FastAPI:
+    app = FastAPI(
+        title="ML Service REST API",
+        version="0.1.0",
+        responses={
+            400: {"model": ErrorResponse},
+            401: {"model": ErrorResponse},
+            402: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            409: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+        },
+    )
+    auth_scheme = HTTPBearer(auto_error=False)
+    resolved_session_factory = session_factory or get_session_factory()
+
+    if initialize_on_startup:
+        @app.on_event("startup")
+        def startup() -> None:
+            engine = get_engine()
+            wait_for_database(engine)
+            initialize_database(engine=engine)
+
+    @app.exception_handler(ApiError)
+    async def handle_api_error(_, exc: ApiError) -> JSONResponse:
+        return build_error_response(exc.status_code, exc.code, exc.message, exc.details)
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_request_validation_error(_, exc: RequestValidationError) -> JSONResponse:
+        return build_error_response(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "validation_error",
+            "Request validation failed",
+            exc.errors(),
+        )
+
+    @app.exception_handler(UserAlreadyExistsError)
+    async def handle_user_already_exists(_, exc: UserAlreadyExistsError) -> JSONResponse:
+        return build_error_response(status.HTTP_409_CONFLICT, "user_exists", str(exc))
+
+    @app.exception_handler(AuthenticationError)
+    async def handle_authentication_error(_, exc: AuthenticationError) -> JSONResponse:
+        return build_error_response(status.HTTP_401_UNAUTHORIZED, "authentication_failed", str(exc))
+
+    @app.exception_handler(EntityNotFoundError)
+    async def handle_not_found(_, exc: EntityNotFoundError) -> JSONResponse:
+        return build_error_response(status.HTTP_404_NOT_FOUND, "entity_not_found", str(exc))
+
+    @app.exception_handler(InsufficientBalanceError)
+    async def handle_insufficient_balance(_, exc: InsufficientBalanceError) -> JSONResponse:
+        return build_error_response(status.HTTP_402_PAYMENT_REQUIRED, "insufficient_balance", str(exc))
+
+    def get_db_session() -> Generator[Session, None, None]:
+        session = resolved_session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    def get_current_user(
+        credentials: HTTPAuthorizationCredentials | None = Security(auth_scheme),
+        session: Session = Depends(get_db_session),
+    ) -> User:
+        if credentials is None:
+            raise ApiError(
+                status.HTTP_401_UNAUTHORIZED,
+                "missing_credentials",
+                "Authorization header with bearer token is required",
+            )
+        return AuthService.get_user_by_token(session, credentials.credentials)
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {
+            "status": "ok",
+            "service": "ml-service-app",
+            "database": "initialized",
+        }
+
+    @app.post("/auth/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+    def register(
+        payload: RegisterRequest,
+        session: Session = Depends(get_db_session),
+    ) -> AuthResponse:
+        user = AuthService.register_user(session, payload.email, payload.password)
+        auth_session = AuthService.create_session(session, user.id)
+        loaded_user = UserService.get_user(session, user.id)
+        return AuthResponse(
+            access_token=auth_session.token,
+            token_type="bearer",
+            user=serialize_user(loaded_user),
+        )
+
+    @app.post("/auth/login", response_model=AuthResponse)
+    def login(
+        payload: LoginRequest,
+        session: Session = Depends(get_db_session),
+    ) -> AuthResponse:
+        user, auth_session = AuthService.login(session, payload.email, payload.password)
+        return AuthResponse(
+            access_token=auth_session.token,
+            token_type="bearer",
+            user=serialize_user(user),
+        )
+
+    @app.get("/users/me", response_model=UserView)
+    def get_me(current_user: User = Depends(get_current_user)) -> UserView:
+        return serialize_user(current_user)
+
+    @app.get("/balance", response_model=BalanceView)
+    def get_balance(current_user: User = Depends(get_current_user)) -> BalanceView:
+        return serialize_balance(current_user)
+
+    @app.post("/balance/top-up", response_model=BalanceOperationResponse)
+    def top_up_balance(
+        payload: TopUpRequest,
+        current_user: User = Depends(get_current_user),
+        session: Session = Depends(get_db_session),
+    ) -> BalanceOperationResponse:
+        transaction = BalanceService.top_up(
+            session,
+            user_id=current_user.id,
+            amount=payload.amount,
+            review_comment="balance top-up via api",
+        )
+        updated_user = UserService.get_user(session, current_user.id)
+        return BalanceOperationResponse(
+            balance=serialize_balance(updated_user),
+            transaction=serialize_transaction(transaction),
+        )
+
+    @app.post("/predict", response_model=PredictionResponse)
+    def predict(
+        payload: PredictionRequest,
+        current_user: User = Depends(get_current_user),
+        session: Session = Depends(get_db_session),
+    ) -> PredictionResponse:
+        invalid_records: list[InvalidRecordView] = []
+        valid_records: list[dict[str, Any]] = []
+
+        for index, raw_record in enumerate(payload.records):
+            try:
+                validated_record = FindingRecordInput.model_validate(raw_record)
+                valid_records.append(validated_record.model_dump())
+            except ValidationError as exc:
+                invalid_records.append(
+                    InvalidRecordView(
+                        index=index,
+                        record=raw_record,
+                        errors=exc.errors(),
+                    )
+                )
+
+        if not valid_records:
+            raise ApiError(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "prediction_validation_failed",
+                "No valid records were provided for prediction",
+                [item.model_dump() for item in invalid_records],
+            )
+
+        model = (
+            MLModelService.get_model(session, payload.model_id)
+            if payload.model_id
+            else MLModelService.get_default_active_model(session)
+        )
+        predicted_priority, confidence, processed_predictions = PredictionService.build_mock_predictions(valid_records)
+        task = PredictionService.record_prediction(
+            session,
+            user_id=current_user.id,
+            model_id=model.id,
+            input_payload=valid_records,
+            predicted_priority=predicted_priority,
+            confidence=confidence,
+            processed_count=len(valid_records),
+            rejected_count=len(invalid_records),
+        )
+        task = session.get(MLTask, task.id)
+        if task is None:
+            raise ApiError(status.HTTP_500_INTERNAL_SERVER_ERROR, "task_not_persisted", "Prediction task was not stored")
+
+        return PredictionResponse(
+            task_id=task.id,
+            model_id=model.id,
+            model_name=model.name,
+            model_version=model.version,
+            status=task.status.value,
+            predicted_priority=task.result.predicted_priority.value,
+            confidence=task.result.confidence,
+            processed_count=task.result.processed_count,
+            rejected_count=task.result.rejected_count,
+            spent_credits=Decimal(str(task.result.spent_credits)),
+            processed_records=[
+                ProcessedRecordPredictionView(**item) for item in processed_predictions
+            ],
+            invalid_records=invalid_records,
+            created_at=task.created_at,
+            finished_at=task.finished_at,
+        )
+
+    @app.get("/history/predictions", response_model=HistoryResponse)
+    def get_prediction_history(
+        current_user: User = Depends(get_current_user),
+        session: Session = Depends(get_db_session),
+    ) -> HistoryResponse:
+        tasks = PredictionService.get_prediction_history(session, current_user.id)
+        return HistoryResponse(items=[serialize_prediction_history_item(task) for task in tasks])
+
+    @app.get("/history/transactions", response_model=TransactionHistoryResponse)
+    def get_transaction_history(
+        current_user: User = Depends(get_current_user),
+        session: Session = Depends(get_db_session),
+    ) -> TransactionHistoryResponse:
+        transactions = TransactionService.get_transaction_history(session, current_user.id)
+        return TransactionHistoryResponse(items=[serialize_transaction(transaction) for transaction in transactions])
+
+    return app
