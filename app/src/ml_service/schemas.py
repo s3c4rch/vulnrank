@@ -34,6 +34,10 @@ class UserView(BaseModel):
     balance: BalanceView
 
 
+class UserListResponse(BaseModel):
+    items: list[UserView]
+
+
 class RegisterRequest(BaseModel):
     email: str
     password: str = Field(min_length=8, max_length=128)
@@ -72,6 +76,7 @@ class TopUpRequest(BaseModel):
 
 class TransactionView(BaseModel):
     id: str
+    user_email: str | None = None
     type: str
     status: str
     amount: Decimal
@@ -156,8 +161,21 @@ class PredictionResponse(BaseModel):
     created_at: datetime
 
 
+class ModelView(BaseModel):
+    id: str
+    name: str
+    version: str
+    description: str
+    cost_per_prediction: Decimal
+
+
+class ModelListResponse(BaseModel):
+    items: list[ModelView]
+
+
 class PredictionHistoryItem(BaseModel):
     task_id: str
+    user_email: str | None = None
     model_id: str
     model_name: str
     model_version: str

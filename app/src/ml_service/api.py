@@ -4,7 +4,7 @@ from collections.abc import Generator
 from decimal import Decimal
 from typing import Any
 
-from fastapi import Depends, FastAPI, Security, status
+from fastapi import Depends, FastAPI, Query, Security, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from ml_service.broker import RabbitMQPublishError, RabbitMQTaskPublisher
 from ml_service.database import get_engine, get_session_factory, wait_for_database
 from ml_service.init_db import initialize_database
-from ml_service.models import MLTask, Transaction, User, generate_id, utcnow
+from ml_service.models import MLModel, MLTask, Transaction, User, UserRole, generate_id, utcnow
 from ml_service.schemas import (
     AuthResponse,
     BalanceOperationResponse,
@@ -21,6 +21,8 @@ from ml_service.schemas import (
     ErrorResponse,
     HistoryResponse,
     LoginRequest,
+    ModelListResponse,
+    ModelView,
     PredictionHistoryItem,
     PredictionTaskMessage,
     PredictionRequest,
@@ -29,6 +31,7 @@ from ml_service.schemas import (
     TopUpRequest,
     TransactionHistoryResponse,
     TransactionView,
+    UserListResponse,
     UserView,
 )
 from ml_service.services import (
@@ -43,6 +46,7 @@ from ml_service.services import (
     UserAlreadyExistsError,
     UserService,
 )
+from ml_service.web import register_web_routes
 
 
 class ApiError(Exception):
@@ -98,6 +102,7 @@ def serialize_user(user: User) -> UserView:
 def serialize_transaction(transaction: Transaction) -> TransactionView:
     return TransactionView(
         id=transaction.id,
+        user_email=transaction.user.email if transaction.user else None,
         type=transaction.type.value,
         status=transaction.status.value,
         amount=Decimal(str(transaction.amount)),
@@ -110,6 +115,7 @@ def serialize_transaction(transaction: Transaction) -> TransactionView:
 def serialize_prediction_history_item(task: MLTask) -> PredictionHistoryItem:
     return PredictionHistoryItem(
         task_id=task.id,
+        user_email=task.user.email if task.user else None,
         model_id=task.model.id,
         model_name=task.model.name,
         model_version=task.model.version,
@@ -127,6 +133,16 @@ def serialize_prediction_history_item(task: MLTask) -> PredictionHistoryItem:
     )
 
 
+def serialize_model(model: MLModel) -> ModelView:
+    return ModelView(
+        id=model.id,
+        name=model.name,
+        version=model.version,
+        description=model.description,
+        cost_per_prediction=Decimal(str(model.cost_per_prediction)),
+    )
+
+
 def create_app(
     session_factory: sessionmaker | None = None,
     initialize_on_startup: bool = True,
@@ -138,6 +154,7 @@ def create_app(
         responses={
             400: {"model": ErrorResponse},
             401: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
             402: {"model": ErrorResponse},
             404: {"model": ErrorResponse},
             409: {"model": ErrorResponse},
@@ -203,6 +220,15 @@ def create_app(
             )
         return AuthService.get_user_by_token(session, credentials.credentials)
 
+    def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
+        if current_user.role != UserRole.ADMIN:
+            raise ApiError(
+                status.HTTP_403_FORBIDDEN,
+                "admin_required",
+                "Admin role is required for this operation",
+            )
+        return current_user
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {
@@ -244,6 +270,14 @@ def create_app(
     @app.get("/balance", response_model=BalanceView)
     def get_balance(current_user: User = Depends(get_current_user)) -> BalanceView:
         return serialize_balance(current_user)
+
+    @app.get("/models", response_model=ModelListResponse)
+    def get_models(
+        _: User = Depends(get_current_user),
+        session: Session = Depends(get_db_session),
+    ) -> ModelListResponse:
+        models = MLModelService.get_active_models(session)
+        return ModelListResponse(items=[serialize_model(model) for model in models])
 
     @app.post("/balance/top-up", response_model=BalanceOperationResponse)
     def top_up_balance(
@@ -317,5 +351,51 @@ def create_app(
     ) -> TransactionHistoryResponse:
         transactions = TransactionService.get_transaction_history(session, current_user.id)
         return TransactionHistoryResponse(items=[serialize_transaction(transaction) for transaction in transactions])
+
+    @app.get("/admin/users", response_model=UserListResponse)
+    def get_admin_users(
+        _: User = Depends(get_current_admin),
+        session: Session = Depends(get_db_session),
+    ) -> UserListResponse:
+        users = UserService.list_users(session)
+        return UserListResponse(items=[serialize_user(user) for user in users])
+
+    @app.post("/admin/users/{user_id}/balance/top-up", response_model=BalanceOperationResponse)
+    def admin_top_up_user(
+        user_id: str,
+        payload: TopUpRequest,
+        _: User = Depends(get_current_admin),
+        session: Session = Depends(get_db_session),
+    ) -> BalanceOperationResponse:
+        transaction = BalanceService.top_up(
+            session,
+            user_id=user_id,
+            amount=payload.amount,
+            review_comment="balance top-up via admin web",
+        )
+        updated_user = UserService.get_user(session, user_id)
+        return BalanceOperationResponse(
+            balance=serialize_balance(updated_user),
+            transaction=serialize_transaction(transaction),
+        )
+
+    @app.get("/admin/history/predictions", response_model=HistoryResponse)
+    def get_admin_prediction_history(
+        failed_only: bool = Query(default=False),
+        _: User = Depends(get_current_admin),
+        session: Session = Depends(get_db_session),
+    ) -> HistoryResponse:
+        tasks = PredictionService.get_all_prediction_history(session, failed_only=failed_only)
+        return HistoryResponse(items=[serialize_prediction_history_item(task) for task in tasks])
+
+    @app.get("/admin/history/transactions", response_model=TransactionHistoryResponse)
+    def get_admin_transaction_history(
+        _: User = Depends(get_current_admin),
+        session: Session = Depends(get_db_session),
+    ) -> TransactionHistoryResponse:
+        transactions = TransactionService.get_all_transaction_history(session)
+        return TransactionHistoryResponse(items=[serialize_transaction(transaction) for transaction in transactions])
+
+    register_web_routes(app)
 
     return app

@@ -109,6 +109,15 @@ class UserService:
     def get_user_by_email(session: Session, email: str) -> User | None:
         return session.scalar(select(User).where(User.email == email))
 
+    @staticmethod
+    def list_users(session: Session) -> list[User]:
+        statement = (
+            select(User)
+            .options(joinedload(User.balance))
+            .order_by(User.created_at.desc())
+        )
+        return list(session.execute(statement).unique().scalars())
+
 
 class AuthService:
     @staticmethod
@@ -299,6 +308,15 @@ class MLModelService:
         if model is None:
             raise EntityNotFoundError(f"Active ML model {model_name} was not found")
         return model
+
+    @staticmethod
+    def get_active_models(session: Session) -> list[MLModel]:
+        statement = (
+            select(MLModel)
+            .where(MLModel.is_active.is_(True))
+            .order_by(MLModel.name.asc(), MLModel.version.desc())
+        )
+        return list(session.scalars(statement))
 
 
 class PredictionService:
@@ -560,12 +578,32 @@ class PredictionService:
             select(MLTask)
             .where(MLTask.user_id == user_id)
             .options(
+                joinedload(MLTask.user),
                 joinedload(MLTask.model),
                 joinedload(MLTask.result),
                 joinedload(MLTask.transactions),
             )
             .order_by(MLTask.created_at.desc())
         )
+        return list(session.execute(statement).unique().scalars())
+
+    @staticmethod
+    def get_all_prediction_history(
+        session: Session,
+        failed_only: bool = False,
+    ) -> list[MLTask]:
+        statement = (
+            select(MLTask)
+            .options(
+                joinedload(MLTask.user),
+                joinedload(MLTask.model),
+                joinedload(MLTask.result),
+                joinedload(MLTask.transactions),
+            )
+            .order_by(MLTask.created_at.desc())
+        )
+        if failed_only:
+            statement = statement.where(MLTask.status == MLTaskStatus.FAILED)
         return list(session.execute(statement).unique().scalars())
 
 
@@ -575,6 +613,16 @@ class TransactionService:
         statement = (
             select(Transaction)
             .where(Transaction.user_id == user_id)
+            .options(joinedload(Transaction.user))
+            .order_by(Transaction.created_at.desc())
+        )
+        return list(session.scalars(statement))
+
+    @staticmethod
+    def get_all_transaction_history(session: Session) -> list[Transaction]:
+        statement = (
+            select(Transaction)
+            .options(joinedload(Transaction.user))
             .order_by(Transaction.created_at.desc())
         )
         return list(session.scalars(statement))
