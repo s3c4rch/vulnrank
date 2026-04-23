@@ -49,31 +49,7 @@ def test_balance_endpoint_and_top_up(client):
     assert top_up_response.json()["transaction"]["type"] == "top_up"
 
 
-def test_predict_returns_error_when_balance_is_insufficient(client):
-    register_payload = register_user(client, email="no-balance@example.com")
-    token = register_payload["access_token"]
-
-    response = client.post(
-        "/predict",
-        headers=auth_header(token),
-        json={
-            "records": [
-                {
-                    "scanner_name": "demo-scanner",
-                    "finding_type": "sql_injection",
-                    "severity_reported": "high",
-                    "cvss_score": 8.6,
-                    "has_cve": True,
-                }
-            ]
-        },
-    )
-
-    assert response.status_code == 402
-    assert response.json()["error"]["code"] == "insufficient_balance"
-
-
-def test_predict_supports_partial_validation_and_persists_history(client):
+def test_predict_enqueues_task_and_returns_task_id(client, published_messages):
     register_payload = register_user(client, email="predict-api@example.com")
     token = register_payload["access_token"]
 
@@ -88,54 +64,58 @@ def test_predict_supports_partial_validation_and_persists_history(client):
         "/predict",
         headers=auth_header(token),
         json={
-            "records": [
-                {
-                    "scanner_name": "scanner-a",
-                    "finding_type": "xss",
-                    "severity_reported": "medium",
-                    "cvss_score": 6.2,
-                    "has_cve": False,
-                },
-                {
-                    "scanner_name": "scanner-b",
-                    "severity_reported": "high",
-                },
-                {
-                    "scanner_name": "scanner-c",
-                    "finding_type": "rce",
-                    "severity_reported": "critical",
-                    "cvss_score": 9.8,
-                    "has_cve": True,
-                },
-            ]
+            "model": "demo_model",
+            "features": {
+                "x1": 1.2,
+                "x2": 5.7,
+            },
         },
     )
 
-    assert predict_response.status_code == 200, predict_response.text
+    assert predict_response.status_code == 202, predict_response.text
     predict_payload = predict_response.json()
-    assert predict_payload["processed_count"] == 2
-    assert predict_payload["rejected_count"] == 1
-    assert len(predict_payload["processed_records"]) == 2
-    assert len(predict_payload["invalid_records"]) == 1
-    assert Decimal(str(predict_payload["spent_credits"])) == Decimal("6.00")
+    assert predict_payload["status"] == "created"
+    assert predict_payload["model"] == "demo_model"
+    assert len(published_messages) == 1
+    assert published_messages[0].task_id == predict_payload["task_id"]
+    assert published_messages[0].features == {"x1": 1.2, "x2": 5.7}
 
     prediction_history = client.get("/history/predictions", headers=auth_header(token))
     assert prediction_history.status_code == 200
     assert len(prediction_history.json()["items"]) == 1
-    assert prediction_history.json()["items"][0]["predicted_priority"] == "high"
+    assert prediction_history.json()["items"][0]["task_id"] == predict_payload["task_id"]
+    assert prediction_history.json()["items"][0]["status"] == "created"
+    assert prediction_history.json()["items"][0]["prediction_value"] is None
 
-    transaction_history = client.get("/history/transactions", headers=auth_header(token))
-    assert transaction_history.status_code == 200
-    assert [item["type"] for item in transaction_history.json()["items"]] == [
-        "prediction_charge",
-        "top_up",
-    ]
+
+def test_predict_returns_error_when_balance_is_insufficient(client):
+    register_payload = register_user(client, email="no-balance@example.com")
+    token = register_payload["access_token"]
+
+    response = client.post(
+        "/predict",
+        headers=auth_header(token),
+        json={
+            "model": "demo_model",
+            "features": {
+                "x1": 8.6,
+                "x2": 5.1,
+            },
+        },
+    )
+
+    assert response.status_code == 402
+    assert response.json()["error"]["code"] == "insufficient_balance"
 
 
 def test_validation_error_has_consistent_format(client):
+    register_payload = register_user(client, email="validation-api@example.com")
+    token = register_payload["access_token"]
+
     response = client.post(
-        "/auth/register",
-        json={"email": "bad-email", "password": "123"},
+        "/predict",
+        headers=auth_header(token),
+        json={"model": "", "features": {}},
     )
 
     assert response.status_code == 422

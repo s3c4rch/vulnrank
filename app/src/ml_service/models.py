@@ -113,6 +113,7 @@ class MLTask(Base):
     status: Mapped[MLTaskStatus] = mapped_column(SqlEnum(MLTaskStatus), nullable=False)
     input_payload: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
     spent_credits: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -132,10 +133,12 @@ class PredictionResult(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_id)
     task_id: Mapped[str] = mapped_column(ForeignKey("ml_tasks.id"), unique=True, nullable=False)
     predicted_priority: Mapped[PriorityClass] = mapped_column(SqlEnum(PriorityClass), nullable=False)
+    prediction_value: Mapped[float | None] = mapped_column(nullable=True)
     confidence: Mapped[float] = mapped_column(nullable=False)
     processed_count: Mapped[int] = mapped_column(Integer, nullable=False)
     rejected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     spent_credits: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
+    worker_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     task: Mapped[MLTask] = relationship(back_populates="result")

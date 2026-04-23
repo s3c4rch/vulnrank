@@ -86,8 +86,27 @@ class BalanceOperationResponse(BaseModel):
 
 
 class PredictionRequest(BaseModel):
-    model_id: str | None = None
-    records: list[dict[str, Any]] = Field(min_length=1)
+    features: dict[str, float] = Field(min_length=1)
+    model: str = Field(default="demo_model", min_length=1)
+
+    @field_validator("features")
+    @classmethod
+    def validate_features(cls, value: dict[str, float]) -> dict[str, float]:
+        normalized: dict[str, float] = {}
+        for raw_name, raw_value in value.items():
+            name = raw_name.strip()
+            if not name:
+                raise ValueError("feature names must be non-empty strings")
+            normalized[name] = float(raw_value)
+        return normalized
+
+    @field_validator("model")
+    @classmethod
+    def normalize_model_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("model must be a non-empty string")
+        return normalized
 
 
 class FindingRecordInput(BaseModel):
@@ -123,21 +142,18 @@ class ProcessedRecordPredictionView(BaseModel):
     confidence: float
 
 
+class PredictionTaskMessage(BaseModel):
+    task_id: str
+    features: dict[str, float] = Field(min_length=1)
+    model: str = Field(min_length=1)
+    timestamp: datetime
+
+
 class PredictionResponse(BaseModel):
     task_id: str
-    model_id: str
-    model_name: str
-    model_version: str
     status: str
-    predicted_priority: str
-    confidence: float
-    processed_count: int
-    rejected_count: int
-    spent_credits: Decimal
-    processed_records: list[ProcessedRecordPredictionView]
-    invalid_records: list[InvalidRecordView]
+    model: str
     created_at: datetime
-    finished_at: datetime | None
 
 
 class PredictionHistoryItem(BaseModel):
@@ -146,11 +162,14 @@ class PredictionHistoryItem(BaseModel):
     model_name: str
     model_version: str
     status: str
+    prediction_value: float | None
     predicted_priority: str | None
     confidence: float | None
+    worker_id: str | None
     processed_count: int | None
     rejected_count: int | None
     spent_credits: Decimal
+    error_message: str | None
     created_at: datetime
     finished_at: datetime | None
 

@@ -7,6 +7,14 @@ from ml_service.database import Base, make_engine, make_session_factory
 from ml_service.init_db import initialize_database
 
 
+class FakeTaskPublisher:
+    def __init__(self, published_messages: list) -> None:
+        self.published_messages = published_messages
+
+    def publish(self, message) -> None:
+        self.published_messages.append(message)
+
+
 @pytest.fixture
 def session_factory():
     engine = make_engine(
@@ -31,9 +39,19 @@ def session(session_factory):
 
 
 @pytest.fixture
-def app(session_factory):
+def published_messages():
+    return []
+
+
+@pytest.fixture
+def app(session_factory, published_messages):
     initialize_database(session_factory=session_factory)
-    return create_app(session_factory=session_factory, initialize_on_startup=False)
+    task_publisher = FakeTaskPublisher(published_messages)
+    return create_app(
+        session_factory=session_factory,
+        initialize_on_startup=False,
+        task_publisher=task_publisher,
+    )
 
 
 @pytest.fixture

@@ -119,6 +119,6 @@ def test_database_initialization_is_idempotent(session_factory):
         task_count = session.scalar(select(func.count()).select_from(MLTask))
 
     assert user_count == 2
-    assert model_count == 2
+    assert model_count == 3
     assert transaction_count == 2
     assert task_count == 0

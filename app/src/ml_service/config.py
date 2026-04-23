@@ -24,6 +24,14 @@ class Settings:
     db_init_attempts: int
     db_init_delay: float
     database_url_override: str | None
+    rabbitmq_host: str
+    rabbitmq_port: int
+    rabbitmq_user: str
+    rabbitmq_password: str
+    rabbitmq_queue: str
+    rabbitmq_connection_attempts: int
+    rabbitmq_connection_delay: float
+    worker_id: str
 
     @property
     def database_url(self) -> str:
@@ -51,4 +59,12 @@ def get_settings() -> Settings:
         db_init_attempts=int(os.getenv("DB_INIT_ATTEMPTS", "30")),
         db_init_delay=float(os.getenv("DB_INIT_DELAY", "1")),
         database_url_override=os.getenv("DATABASE_URL"),
+        rabbitmq_host=os.getenv("RABBITMQ_HOST", "rabbitmq"),
+        rabbitmq_port=int(os.getenv("RABBITMQ_PORT", "5672")),
+        rabbitmq_user=os.getenv("RABBITMQ_USER", "ml_queue_user"),
+        rabbitmq_password=os.getenv("RABBITMQ_PASSWORD", "ml_queue_password"),
+        rabbitmq_queue=os.getenv("RABBITMQ_QUEUE", "ml_tasks"),
+        rabbitmq_connection_attempts=int(os.getenv("RABBITMQ_CONNECTION_ATTEMPTS", "30")),
+        rabbitmq_connection_delay=float(os.getenv("RABBITMQ_CONNECTION_DELAY", "1")),
+        worker_id=os.getenv("WORKER_ID", "worker-default"),
     )

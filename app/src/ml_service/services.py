@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -18,6 +19,7 @@ from ml_service.models import (
     TransactionType,
     User,
     UserRole,
+    generate_id,
     utcnow,
 )
 from ml_service.security import generate_auth_token, hash_password, verify_password
@@ -190,6 +192,23 @@ class BalanceService:
         return transaction
 
     @staticmethod
+    def ensure_sufficient_balance(
+        session: Session,
+        user_id: str,
+        amount: Decimal | int | float | str,
+    ) -> Balance:
+        normalized_amount = normalize_amount(amount)
+        balance = BalanceService.get_balance(session, user_id)
+        current_amount = Decimal(str(balance.amount))
+
+        if current_amount < normalized_amount:
+            raise InsufficientBalanceError(
+                f"User {user_id} has insufficient balance for charge {normalized_amount}"
+            )
+
+        return balance
+
+    @staticmethod
     def charge(
         session: Session,
         user_id: str,
@@ -199,13 +218,8 @@ class BalanceService:
         commit: bool = True,
     ) -> Transaction:
         normalized_amount = normalize_amount(amount)
-        balance = BalanceService.get_balance(session, user_id)
+        balance = BalanceService.ensure_sufficient_balance(session, user_id, normalized_amount)
         current_amount = Decimal(str(balance.amount))
-
-        if current_amount < normalized_amount:
-            raise InsufficientBalanceError(
-                f"User {user_id} has insufficient balance for charge {normalized_amount}"
-            )
 
         balance.amount = current_amount - normalized_amount
         transaction = Transaction(
@@ -274,6 +288,18 @@ class MLModelService:
             raise EntityNotFoundError("No active ML model is available")
         return model
 
+    @staticmethod
+    def get_active_model_by_name(session: Session, model_name: str) -> MLModel:
+        statement = (
+            select(MLModel)
+            .where(MLModel.is_active.is_(True), MLModel.name == model_name)
+            .order_by(MLModel.created_at.desc(), MLModel.version.desc())
+        )
+        model = session.scalars(statement).first()
+        if model is None:
+            raise EntityNotFoundError(f"Active ML model {model_name} was not found")
+        return model
+
 
 class PredictionService:
     @staticmethod
@@ -320,6 +346,157 @@ class PredictionService:
         )
         average_confidence = round(sum(confidences) / len(confidences), 2)
         return overall_priority, average_confidence, predictions
+
+    @staticmethod
+    def create_queued_task(
+        session: Session,
+        user_id: str,
+        model_id: str,
+        input_payload: dict[str, Any],
+        task_id: str | None = None,
+    ) -> MLTask:
+        user = session.get(User, user_id)
+        if user is None:
+            raise EntityNotFoundError(f"User {user_id} was not found")
+
+        model = session.get(MLModel, model_id)
+        if model is None:
+            raise EntityNotFoundError(f"ML model {model_id} was not found")
+
+        task = MLTask(
+            id=task_id or generate_id(),
+            user_id=user_id,
+            model_id=model_id,
+            status=MLTaskStatus.CREATED,
+            input_payload=[input_payload],
+            spent_credits=Decimal("0.00"),
+            error_message=None,
+        )
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+        return task
+
+    @staticmethod
+    def get_task(session: Session, task_id: str) -> MLTask:
+        statement = (
+            select(MLTask)
+            .where(MLTask.id == task_id)
+            .options(
+                joinedload(MLTask.model),
+                joinedload(MLTask.result),
+                joinedload(MLTask.transactions),
+            )
+        )
+        task = session.execute(statement).unique().scalar_one_or_none()
+        if task is None:
+            raise EntityNotFoundError(f"ML task {task_id} was not found")
+        return task
+
+    @staticmethod
+    def fail_task(session: Session, task_id: str, error_message: str) -> MLTask:
+        task = PredictionService.get_task(session, task_id)
+        task.status = MLTaskStatus.FAILED
+        task.error_message = error_message
+        task.finished_at = utcnow()
+        session.commit()
+        session.refresh(task)
+        return task
+
+    @staticmethod
+    def validate_prediction_features(features: dict[str, object]) -> dict[str, float]:
+        if not isinstance(features, dict) or not features:
+            raise ValueError("features must contain at least one numeric value")
+
+        normalized_features: dict[str, float] = {}
+        for raw_name, raw_value in features.items():
+            name = str(raw_name).strip()
+            if not name:
+                raise ValueError("feature names must be non-empty strings")
+            try:
+                normalized_features[name] = float(raw_value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"feature {name} must be numeric") from exc
+
+        return normalized_features
+
+    @staticmethod
+    def build_mock_inference(features: dict[str, float]) -> tuple[float, PriorityClass, float]:
+        feature_values = list(features.values())
+        average_value = sum(feature_values) / len(feature_values)
+        spread_bonus = max(feature_values) - min(feature_values) if len(feature_values) > 1 else 0.0
+        prediction_value = round(max(0.0, min(10.0, average_value + (spread_bonus * 0.15))), 2)
+
+        if prediction_value >= 7.0:
+            predicted_priority = PriorityClass.HIGH
+        elif prediction_value >= 4.0:
+            predicted_priority = PriorityClass.MEDIUM
+        else:
+            predicted_priority = PriorityClass.LOW
+
+        confidence = round(min(0.99, 0.55 + (prediction_value / 20)), 2)
+        return prediction_value, predicted_priority, confidence
+
+    @staticmethod
+    def process_task(
+        session: Session,
+        task_id: str,
+        model_name: str,
+        features: dict[str, object],
+        worker_id: str,
+    ) -> MLTask:
+        task = PredictionService.get_task(session, task_id)
+
+        if task.status == MLTaskStatus.COMPLETED and task.result is not None:
+            return task
+
+        if task.model.name != model_name:
+            raise ValueError(
+                f"task model mismatch: expected {task.model.name}, received {model_name}"
+            )
+
+        task.status = MLTaskStatus.PROCESSING
+        task.error_message = None
+        session.commit()
+        session.refresh(task)
+
+        normalized_features = PredictionService.validate_prediction_features(features)
+        prediction_value, predicted_priority, confidence = PredictionService.build_mock_inference(
+            normalized_features
+        )
+        spent_credits = Decimal(str(task.model.cost_per_prediction)).quantize(
+            TWOPLACES,
+            rounding=ROUND_HALF_UP,
+        )
+
+        if spent_credits > Decimal("0.00"):
+            BalanceService.charge(
+                session,
+                user_id=task.user_id,
+                amount=spent_credits,
+                task_id=task.id,
+                review_comment=f"prediction charge by {worker_id}",
+                commit=False,
+            )
+
+        task.status = MLTaskStatus.COMPLETED
+        task.spent_credits = spent_credits
+        task.finished_at = utcnow()
+        task.error_message = None
+
+        result = task.result or PredictionResult(task_id=task.id)
+        result.predicted_priority = predicted_priority
+        result.prediction_value = prediction_value
+        result.confidence = confidence
+        result.processed_count = 1
+        result.rejected_count = 0
+        result.spent_credits = spent_credits
+        result.worker_id = worker_id
+        session.add(result)
+
+        session.commit()
+        session.refresh(task)
+        return task
 
     @staticmethod
     def record_prediction(

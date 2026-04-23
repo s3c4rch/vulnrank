@@ -29,6 +29,12 @@ DEMO_USERS = (
 
 DEMO_MODELS = (
     {
+        "name": "demo_model",
+        "version": "1.0",
+        "description": "Task 5 demo model for RabbitMQ worker processing",
+        "cost_per_prediction": Decimal("2.50"),
+    },
+    {
         "name": "priority-classifier",
         "version": "1.0",
         "description": "Demo security finding priority classifier",
@@ -47,7 +53,12 @@ def initialize_database(
     engine: Engine | None = None,
     session_factory: sessionmaker | None = None,
 ) -> None:
-    database_engine = engine or get_engine()
+    database_engine = engine
+    if database_engine is None and session_factory is not None:
+        database_engine = session_factory.kw.get("bind")
+    if database_engine is None:
+        database_engine = get_engine()
+
     create_schema(database_engine)
     factory = session_factory or get_session_factory()
 

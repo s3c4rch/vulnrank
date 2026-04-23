@@ -8,25 +8,23 @@ from fastapi import Depends, FastAPI, Security, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import ValidationError
 from sqlalchemy.orm import Session, sessionmaker
 
+from ml_service.broker import RabbitMQPublishError, RabbitMQTaskPublisher
 from ml_service.database import get_engine, get_session_factory, wait_for_database
 from ml_service.init_db import initialize_database
-from ml_service.models import MLTask, Transaction, User
+from ml_service.models import MLTask, Transaction, User, generate_id, utcnow
 from ml_service.schemas import (
     AuthResponse,
     BalanceOperationResponse,
     BalanceView,
     ErrorResponse,
-    FindingRecordInput,
     HistoryResponse,
-    InvalidRecordView,
     LoginRequest,
     PredictionHistoryItem,
+    PredictionTaskMessage,
     PredictionRequest,
     PredictionResponse,
-    ProcessedRecordPredictionView,
     RegisterRequest,
     TopUpRequest,
     TransactionHistoryResponse,
@@ -116,11 +114,14 @@ def serialize_prediction_history_item(task: MLTask) -> PredictionHistoryItem:
         model_name=task.model.name,
         model_version=task.model.version,
         status=task.status.value,
+        prediction_value=task.result.prediction_value if task.result else None,
         predicted_priority=task.result.predicted_priority.value if task.result else None,
         confidence=task.result.confidence if task.result else None,
+        worker_id=task.result.worker_id if task.result else None,
         processed_count=task.result.processed_count if task.result else None,
         rejected_count=task.result.rejected_count if task.result else None,
         spent_credits=Decimal(str(task.spent_credits)),
+        error_message=task.error_message,
         created_at=task.created_at,
         finished_at=task.finished_at,
     )
@@ -129,6 +130,7 @@ def serialize_prediction_history_item(task: MLTask) -> PredictionHistoryItem:
 def create_app(
     session_factory: sessionmaker | None = None,
     initialize_on_startup: bool = True,
+    task_publisher: Any | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="ML Service REST API",
@@ -144,6 +146,7 @@ def create_app(
     )
     auth_scheme = HTTPBearer(auto_error=False)
     resolved_session_factory = session_factory or get_session_factory()
+    publisher = task_publisher or RabbitMQTaskPublisher()
 
     if initialize_on_startup:
         @app.on_event("startup")
@@ -159,7 +162,7 @@ def create_app(
     @app.exception_handler(RequestValidationError)
     async def handle_request_validation_error(_, exc: RequestValidationError) -> JSONResponse:
         return build_error_response(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "validation_error",
             "Request validation failed",
             exc.errors(),
@@ -260,73 +263,43 @@ def create_app(
             transaction=serialize_transaction(transaction),
         )
 
-    @app.post("/predict", response_model=PredictionResponse)
+    @app.post("/predict", response_model=PredictionResponse, status_code=status.HTTP_202_ACCEPTED)
     def predict(
         payload: PredictionRequest,
         current_user: User = Depends(get_current_user),
         session: Session = Depends(get_db_session),
     ) -> PredictionResponse:
-        invalid_records: list[InvalidRecordView] = []
-        valid_records: list[dict[str, Any]] = []
+        model = MLModelService.get_active_model_by_name(session, payload.model)
+        BalanceService.ensure_sufficient_balance(session, current_user.id, model.cost_per_prediction)
 
-        for index, raw_record in enumerate(payload.records):
-            try:
-                validated_record = FindingRecordInput.model_validate(raw_record)
-                valid_records.append(validated_record.model_dump())
-            except ValidationError as exc:
-                invalid_records.append(
-                    InvalidRecordView(
-                        index=index,
-                        record=raw_record,
-                        errors=exc.errors(),
-                    )
-                )
-
-        if not valid_records:
-            raise ApiError(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                "prediction_validation_failed",
-                "No valid records were provided for prediction",
-                [item.model_dump() for item in invalid_records],
-            )
-
-        model = (
-            MLModelService.get_model(session, payload.model_id)
-            if payload.model_id
-            else MLModelService.get_default_active_model(session)
+        task_message = PredictionTaskMessage(
+            task_id=generate_id(),
+            features=payload.features,
+            model=model.name,
+            timestamp=utcnow(),
         )
-        predicted_priority, confidence, processed_predictions = PredictionService.build_mock_predictions(valid_records)
-        task = PredictionService.record_prediction(
+        task = PredictionService.create_queued_task(
             session,
             user_id=current_user.id,
             model_id=model.id,
-            input_payload=valid_records,
-            predicted_priority=predicted_priority,
-            confidence=confidence,
-            processed_count=len(valid_records),
-            rejected_count=len(invalid_records),
+            input_payload=task_message.model_dump(mode="json"),
+            task_id=task_message.task_id,
         )
-        task = session.get(MLTask, task.id)
-        if task is None:
-            raise ApiError(status.HTTP_500_INTERNAL_SERVER_ERROR, "task_not_persisted", "Prediction task was not stored")
+        try:
+            publisher.publish(task_message)
+        except RabbitMQPublishError as exc:
+            PredictionService.fail_task(session, task.id, str(exc))
+            raise ApiError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "queue_unavailable",
+                "Prediction task could not be published to RabbitMQ",
+            ) from exc
 
         return PredictionResponse(
             task_id=task.id,
-            model_id=model.id,
-            model_name=model.name,
-            model_version=model.version,
             status=task.status.value,
-            predicted_priority=task.result.predicted_priority.value,
-            confidence=task.result.confidence,
-            processed_count=task.result.processed_count,
-            rejected_count=task.result.rejected_count,
-            spent_credits=Decimal(str(task.result.spent_credits)),
-            processed_records=[
-                ProcessedRecordPredictionView(**item) for item in processed_predictions
-            ],
-            invalid_records=invalid_records,
+            model=model.name,
             created_at=task.created_at,
-            finished_at=task.finished_at,
         )
 
     @app.get("/history/predictions", response_model=HistoryResponse)
