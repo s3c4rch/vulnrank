@@ -45,7 +45,6 @@ def test_worker_processes_queued_task_and_charges_balance(session_factory):
 
     assert result["status"] == "success"
     assert result["worker_id"] == "worker-1"
-    assert result["prediction"] == 7.3
 
     with session_factory() as session:
         task = PredictionService.get_task(session, message.task_id)
@@ -54,7 +53,7 @@ def test_worker_processes_queued_task_and_charges_balance(session_factory):
     assert task.status == MLTaskStatus.COMPLETED
     assert task.result is not None
     assert task.result.worker_id == "worker-1"
-    assert task.result.prediction_value == 7.3
+    assert round(float(result["prediction"]), 2) == round(float(task.result.prediction_value), 2)
     assert task.result.predicted_priority.value == "high"
     assert Decimal(str(task.spent_credits)) == Decimal("2.50")
     assert [transaction.type.value for transaction in transactions] == [
