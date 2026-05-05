@@ -1,9 +1,11 @@
 from functools import lru_cache
 from time import sleep
+from collections.abc import Generator
 
+from fastapi import Request
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from ml_service.config import get_settings
 
@@ -29,6 +31,21 @@ def get_engine() -> Engine:
 @lru_cache(maxsize=1)
 def get_session_factory() -> sessionmaker:
     return make_session_factory(get_engine())
+
+
+def resolve_session_factory(request: Request) -> sessionmaker:
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is not None:
+        return session_factory
+    return get_session_factory()
+
+
+def get_db_session(request: Request) -> Generator[Session, None, None]:
+    session = resolve_session_factory(request)()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 def create_schema(engine: Engine | None = None) -> None:

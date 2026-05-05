@@ -21,8 +21,37 @@ services:
       - "80:80"
       - "443:443"
 
+  worker-1:
+    build:
+      context: ./worker
+    env_file:
+      - ./app/.env
+    environment:
+      WORKER_ID: worker-1
+    volumes:
+      - ./app/src:/worker/src
+    depends_on:
+      - rabbitmq
+      - database
+
+  worker-2:
+    build:
+      context: ./worker
+    env_file:
+      - ./app/.env
+    environment:
+      WORKER_ID: worker-2
+    volumes:
+      - ./app/src:/worker/src
+    depends_on:
+      - rabbitmq
+      - database
+
   rabbitmq:
     image: rabbitmq:3-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ml_queue_user
+      RABBITMQ_DEFAULT_PASS: ml_queue_password
     ports:
       - "5672:5672"
       - "15672:15672"

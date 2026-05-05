@@ -454,17 +454,12 @@ function startTaskPolling(taskId) {
   window.clearTimeout(state.pollTimer);
 
   const poll = async () => {
-    const response = await apiRequest("/history/predictions", { auth: true, silent: true });
+    const response = await apiRequest(`/predict/${taskId}`, { auth: true, silent: true });
     if (!response.ok) {
       return;
     }
 
-    renderPredictionRows(elements.predictionHistoryBody, response.data.items, { showUser: false });
-    const task = response.data.items.find((item) => item.task_id === taskId);
-    if (!task) {
-      state.pollTimer = window.setTimeout(poll, 2000);
-      return;
-    }
+    const task = response.data;
 
     if (task.status === "completed") {
       showPredictionStatus(
@@ -486,6 +481,7 @@ function startTaskPolling(taskId) {
     }
 
     showPredictionStatus(`Задача ${task.task_id} сейчас в статусе ${task.status}. Продолжаем опрос...`);
+    await refreshWorkspace();
     state.pollTimer = window.setTimeout(poll, 2000);
   };
 

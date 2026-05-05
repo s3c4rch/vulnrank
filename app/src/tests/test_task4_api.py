@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+from ml_service.worker import process_delivery
+
 
 def auth_header(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
@@ -86,6 +88,52 @@ def test_predict_enqueues_task_and_returns_task_id(client, published_messages):
     assert prediction_history.json()["items"][0]["task_id"] == predict_payload["task_id"]
     assert prediction_history.json()["items"][0]["status"] == "created"
     assert prediction_history.json()["items"][0]["prediction_value"] is None
+
+    task_response = client.get(
+        f"/predict/{predict_payload['task_id']}",
+        headers=auth_header(token),
+    )
+    assert task_response.status_code == 200
+    assert task_response.json()["status"] == "created"
+
+
+def test_predict_task_endpoint_returns_result_after_worker_processing(client, published_messages, session_factory):
+    register_payload = register_user(client, email="predict-result@example.com")
+    token = register_payload["access_token"]
+
+    top_up_response = client.post(
+        "/balance/top-up",
+        headers=auth_header(token),
+        json={"amount": "20.00"},
+    )
+    assert top_up_response.status_code == 200
+
+    predict_response = client.post(
+        "/predict",
+        headers=auth_header(token),
+        json={
+            "model": "demo_model",
+            "features": {
+                "x1": 7.8,
+                "x2": 8.3,
+            },
+        },
+    )
+    assert predict_response.status_code == 202, predict_response.text
+    task_id = predict_response.json()["task_id"]
+
+    process_delivery(
+        body=published_messages[0].model_dump_json().encode("utf-8"),
+        session_factory=session_factory,
+        worker_id="worker-1",
+    )
+
+    task_response = client.get(f"/predict/{task_id}", headers=auth_header(token))
+    assert task_response.status_code == 200
+    assert task_response.json()["status"] == "completed"
+    assert task_response.json()["worker_id"] == "worker-1"
+    assert task_response.json()["prediction_value"] is not None
+    assert task_response.json()["predicted_priority"] in {"medium", "high"}
 
 
 def test_predict_returns_error_when_balance_is_insufficient(client):

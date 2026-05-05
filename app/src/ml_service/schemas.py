@@ -161,6 +161,22 @@ class PredictionResponse(BaseModel):
     created_at: datetime
 
 
+class PredictionTaskDetailResponse(BaseModel):
+    task_id: str
+    model_id: str
+    model_name: str
+    model_version: str
+    status: str
+    prediction_value: float | None
+    predicted_priority: str | None
+    confidence: float | None
+    worker_id: str | None
+    spent_credits: Decimal
+    error_message: str | None
+    created_at: datetime
+    finished_at: datetime | None
+
+
 class ModelView(BaseModel):
     id: str
     name: str

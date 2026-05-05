@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
+from ml_service.inference import build_feature_vector, predict_priority
 from ml_service.models import (
     AuthSession,
     Balance,
@@ -321,51 +322,6 @@ class MLModelService:
 
 class PredictionService:
     @staticmethod
-    def build_mock_predictions(
-        records: list[dict[str, object]],
-    ) -> tuple[PriorityClass, float, list[dict[str, object]]]:
-        predictions: list[dict[str, object]] = []
-        priorities: list[PriorityClass] = []
-        confidences: list[float] = []
-
-        for index, record in enumerate(records):
-            severity = str(record.get("severity_reported", "low")).lower()
-            cvss_score = float(record.get("cvss_score") or 0.0)
-            has_cve = bool(record.get("has_cve", False))
-
-            if severity == "critical" or severity == "high" or cvss_score >= 8.0:
-                priority = PriorityClass.HIGH
-                confidence = 0.93 if has_cve or cvss_score >= 9.0 else 0.88
-            elif severity == "medium" or cvss_score >= 5.0:
-                priority = PriorityClass.MEDIUM
-                confidence = 0.79
-            else:
-                priority = PriorityClass.LOW
-                confidence = 0.68
-
-            priorities.append(priority)
-            confidences.append(confidence)
-            predictions.append(
-                {
-                    "record_index": index,
-                    "finding_type": record.get("finding_type"),
-                    "predicted_priority": priority.value,
-                    "confidence": round(confidence, 2),
-                }
-            )
-
-        overall_priority = max(
-            priorities,
-            key=lambda item: {
-                PriorityClass.LOW: 1,
-                PriorityClass.MEDIUM: 2,
-                PriorityClass.HIGH: 3,
-            }[item],
-        )
-        average_confidence = round(sum(confidences) / len(confidences), 2)
-        return overall_priority, average_confidence, predictions
-
-    @staticmethod
     def create_queued_task(
         session: Session,
         user_id: str,
@@ -424,7 +380,7 @@ class PredictionService:
     @staticmethod
     def validate_prediction_features(features: dict[str, object]) -> dict[str, float]:
         if not isinstance(features, dict) or not features:
-            raise ValueError("features must contain at least one numeric value")
+            raise ValueError("features must contain numeric values for x1 and x2")
 
         normalized_features: dict[str, float] = {}
         for raw_name, raw_value in features.items():
@@ -436,24 +392,12 @@ class PredictionService:
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"feature {name} must be numeric") from exc
 
+        build_feature_vector(normalized_features)
         return normalized_features
 
     @staticmethod
-    def build_mock_inference(features: dict[str, float]) -> tuple[float, PriorityClass, float]:
-        feature_values = list(features.values())
-        average_value = sum(feature_values) / len(feature_values)
-        spread_bonus = max(feature_values) - min(feature_values) if len(feature_values) > 1 else 0.0
-        prediction_value = round(max(0.0, min(10.0, average_value + (spread_bonus * 0.15))), 2)
-
-        if prediction_value >= 7.0:
-            predicted_priority = PriorityClass.HIGH
-        elif prediction_value >= 4.0:
-            predicted_priority = PriorityClass.MEDIUM
-        else:
-            predicted_priority = PriorityClass.LOW
-
-        confidence = round(min(0.99, 0.55 + (prediction_value / 20)), 2)
-        return prediction_value, predicted_priority, confidence
+    def build_model_inference(features: dict[str, float]) -> tuple[float, PriorityClass, float]:
+        return predict_priority(features)
 
     @staticmethod
     def process_task(
@@ -479,7 +423,7 @@ class PredictionService:
         session.refresh(task)
 
         normalized_features = PredictionService.validate_prediction_features(features)
-        prediction_value, predicted_priority, confidence = PredictionService.build_mock_inference(
+        prediction_value, predicted_priority, confidence = PredictionService.build_model_inference(
             normalized_features
         )
         spent_credits = Decimal(str(task.model.cost_per_prediction)).quantize(

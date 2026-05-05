@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from ml_service.broker import create_rabbitmq_connection
 from ml_service.config import get_settings
 from ml_service.database import get_engine, get_session_factory, wait_for_database
+from ml_service.inference import warm_up_model
 from ml_service.init_db import initialize_database
 from ml_service.schemas import PredictionTaskMessage
 from ml_service.services import EntityNotFoundError, PredictionService
@@ -95,6 +96,7 @@ def main() -> None:
     engine = get_engine()
     wait_for_database(engine)
     initialize_database(engine=engine)
+    warm_up_model()
     session_factory = get_session_factory()
 
     connection = create_rabbitmq_connection(settings)
