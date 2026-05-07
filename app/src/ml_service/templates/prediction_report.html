@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>$report_title</title>
+    <style>
+      :root {
+        --ink-900: #16242f;
+        --ink-700: #3d5564;
+        --ink-500: #657b88;
+        --sand-100: #f6efdf;
+        --mint-500: #3d7a67;
+        --rose-500: #b85760;
+        --border: rgba(22, 36, 47, 0.12);
+        --shadow: 0 20px 60px rgba(22, 36, 47, 0.12);
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        color: var(--ink-900);
+        background:
+          radial-gradient(circle at top left, rgba(217, 135, 52, 0.18), transparent 24%),
+          radial-gradient(circle at bottom right, rgba(61, 122, 103, 0.16), transparent 28%),
+          linear-gradient(145deg, #f4ead8 0%, #fbf7ef 44%, #efe5d3 100%);
+        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+      }
+
+      .shell {
+        width: min(1120px, calc(100vw - 32px));
+        margin: 24px auto 40px;
+      }
+
+      .hero, .report-section, .footer {
+        background: rgba(255, 253, 248, 0.9);
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        border-radius: 28px;
+        padding: 28px;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--ink-500);
+        font-size: 12px;
+      }
+
+      h1, h2, strong {
+        margin: 0;
+        font-family: "Iowan Old Style", Georgia, serif;
+      }
+
+      h1 {
+        font-size: clamp(32px, 4vw, 46px);
+        line-height: 1;
+      }
+
+      .hero-grid {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: 1.5fr 1fr;
+        margin-top: 20px;
+      }
+
+      .hero-card {
+        border-radius: 20px;
+        border: 1px solid var(--border);
+        background: linear-gradient(180deg, rgba(255,255,255,0.88), rgba(246,239,223,0.92));
+        padding: 18px;
+      }
+
+      .hero-card span, .summary-card span {
+        display: block;
+        color: var(--ink-500);
+        font-size: 13px;
+        margin-bottom: 6px;
+      }
+
+      .hero-card strong { font-size: 20px; }
+
+      .summary-grid {
+        display: grid;
+        gap: 14px;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        margin-top: 24px;
+      }
+
+      .summary-card {
+        border-radius: 18px;
+        padding: 16px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.8);
+      }
+
+      .summary-card strong { font-size: 18px; }
+
+      .report-section {
+        border-radius: 24px;
+        padding: 22px;
+        margin-top: 18px;
+      }
+
+      .report-section h2 {
+        font-size: 24px;
+        margin-bottom: 14px;
+      }
+
+      .table-wrap { overflow-x: auto; }
+      table { width: 100%; border-collapse: collapse; }
+
+      th, td {
+        padding: 12px 14px;
+        text-align: left;
+        vertical-align: top;
+        border-bottom: 1px solid rgba(22, 36, 47, 0.08);
+        font-size: 14px;
+      }
+
+      th {
+        color: var(--ink-700);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      code {
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: var(--ink-700);
+      }
+
+      .muted {
+        margin: 0;
+        color: var(--ink-700);
+        line-height: 1.6;
+      }
+
+      .footer {
+        border-radius: 24px;
+        padding: 20px 22px;
+        margin-top: 18px;
+        color: var(--ink-700);
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+
+      @media (max-width: 760px) {
+        .shell {
+          width: min(100vw - 20px, 100%);
+          margin: 10px auto 20px;
+        }
+
+        .hero, .report-section, .footer {
+          border-radius: 18px;
+          padding: 18px;
+        }
+
+        .hero-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">vulnrank MVP inference report</p>
+        <h1>$report_kind</h1>
+        <div class="hero-grid">
+          <div class="hero-card"><span>Task ID</span><strong>$task_id</strong></div>
+          <div class="hero-card"><span>Input</span><strong>$original_filename</strong></div>
+          <div class="hero-card"><span>Created at</span><strong>$created_at</strong></div>
+          <div class="hero-card"><span>Finished at</span><strong>$finished_at</strong></div>
+          <div class="hero-card"><span>Model</span><strong>$model_badge</strong></div>
+        </div>
+        <div class="summary-grid">$summary_cards</div>
+      </section>
+
+      $file_breakdown_section
+      $processed_predictions_section
+      $invalid_records_section
+      $invalid_files_section
+
+      <section class="footer">
+        <div><strong>$model_name</strong> <span>version $model_version</span></div>
+        <div>$footer_note</div>
+      </section>
+    </main>
+  </body>
+</html>

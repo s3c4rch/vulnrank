@@ -1,6 +1,18 @@
 from decimal import Decimal
 
+from ml_service.model_catalog import DEFAULT_MODEL_NAME
+from ml_service.model_runtime import ModelRuntimePrediction
+from ml_service.models import PriorityClass
 from ml_service.worker import process_delivery
+
+
+class StubRuntimeClient:
+    def predict_priority(self, model_tag: str, features: dict[str, float]) -> ModelRuntimePrediction:
+        return ModelRuntimePrediction(
+            predicted_priority=PriorityClass.HIGH,
+            confidence=0.91,
+            reason=f"stubbed {model_tag}",
+        )
 
 
 def auth_header(token: str) -> dict[str, str]:
@@ -14,6 +26,30 @@ def register_user(client, email: str = "api-user@example.com", password: str = "
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def login_user(client, email: str, password: str):
+    response = client.post("/auth/login", json={"email": email, "password": password})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def request_and_approve_top_up(client, user_token: str, amount: str = "20.00"):
+    top_up_response = client.post(
+        "/balance/top-up",
+        headers=auth_header(user_token),
+        json={"amount": amount},
+    )
+    assert top_up_response.status_code == 200, top_up_response.text
+
+    admin_payload = login_user(client, "demo-admin@example.com", "demo-admin-password")
+    approve_response = client.post(
+        f"/admin/top-ups/{top_up_response.json()['transaction']['id']}/approve",
+        headers=auth_header(admin_payload["access_token"]),
+        json={"review_comment": "approved in api test"},
+    )
+    assert approve_response.status_code == 200, approve_response.text
+    return approve_response
 
 
 def test_register_and_login_flow(client):
@@ -47,26 +83,22 @@ def test_balance_endpoint_and_top_up(client):
         json={"amount": "25.50"},
     )
     assert top_up_response.status_code == 200
-    assert Decimal(str(top_up_response.json()["balance"]["amount"])) == Decimal("25.50")
+    assert Decimal(str(top_up_response.json()["balance"]["amount"])) == Decimal("0.00")
     assert top_up_response.json()["transaction"]["type"] == "top_up"
+    assert top_up_response.json()["transaction"]["status"] == "pending"
 
 
 def test_predict_enqueues_task_and_returns_task_id(client, published_messages):
     register_payload = register_user(client, email="predict-api@example.com")
     token = register_payload["access_token"]
 
-    top_up_response = client.post(
-        "/balance/top-up",
-        headers=auth_header(token),
-        json={"amount": "20.00"},
-    )
-    assert top_up_response.status_code == 200
+    request_and_approve_top_up(client, token, "20.00")
 
     predict_response = client.post(
         "/predict",
         headers=auth_header(token),
         json={
-            "model": "demo_model",
+            "model": DEFAULT_MODEL_NAME,
             "features": {
                 "x1": 1.2,
                 "x2": 5.7,
@@ -77,9 +109,10 @@ def test_predict_enqueues_task_and_returns_task_id(client, published_messages):
     assert predict_response.status_code == 202, predict_response.text
     predict_payload = predict_response.json()
     assert predict_payload["status"] == "created"
-    assert predict_payload["model"] == "demo_model"
+    assert predict_payload["model"] == DEFAULT_MODEL_NAME
     assert len(published_messages) == 1
     assert published_messages[0].task_id == predict_payload["task_id"]
+    assert published_messages[0].model == DEFAULT_MODEL_NAME
     assert published_messages[0].features == {"x1": 1.2, "x2": 5.7}
 
     prediction_history = client.get("/history/predictions", headers=auth_header(token))
@@ -101,18 +134,13 @@ def test_predict_task_endpoint_returns_result_after_worker_processing(client, pu
     register_payload = register_user(client, email="predict-result@example.com")
     token = register_payload["access_token"]
 
-    top_up_response = client.post(
-        "/balance/top-up",
-        headers=auth_header(token),
-        json={"amount": "20.00"},
-    )
-    assert top_up_response.status_code == 200
+    request_and_approve_top_up(client, token, "20.00")
 
     predict_response = client.post(
         "/predict",
         headers=auth_header(token),
         json={
-            "model": "demo_model",
+            "model": DEFAULT_MODEL_NAME,
             "features": {
                 "x1": 7.8,
                 "x2": 8.3,
@@ -126,6 +154,7 @@ def test_predict_task_endpoint_returns_result_after_worker_processing(client, pu
         body=published_messages[0].model_dump_json().encode("utf-8"),
         session_factory=session_factory,
         worker_id="worker-1",
+        runtime_client=StubRuntimeClient(),
     )
 
     task_response = client.get(f"/predict/{task_id}", headers=auth_header(token))
@@ -144,7 +173,7 @@ def test_predict_returns_error_when_balance_is_insufficient(client):
         "/predict",
         headers=auth_header(token),
         json={
-            "model": "demo_model",
+            "model": DEFAULT_MODEL_NAME,
             "features": {
                 "x1": 8.6,
                 "x2": 5.1,

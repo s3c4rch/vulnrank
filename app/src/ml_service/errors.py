@@ -10,6 +10,7 @@ from ml_service.services import (
     AuthenticationError,
     EntityNotFoundError,
     InsufficientBalanceError,
+    InvalidTransactionStateError,
     UserAlreadyExistsError,
 )
 
@@ -76,3 +77,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(InsufficientBalanceError)
     async def handle_insufficient_balance(_, exc: InsufficientBalanceError) -> JSONResponse:
         return build_error_response(status.HTTP_402_PAYMENT_REQUIRED, "insufficient_balance", str(exc))
+
+    @app.exception_handler(InvalidTransactionStateError)
+    async def handle_invalid_transaction_state(_, exc: InvalidTransactionStateError) -> JSONResponse:
+        return build_error_response(status.HTTP_409_CONFLICT, "invalid_transaction_state", str(exc))

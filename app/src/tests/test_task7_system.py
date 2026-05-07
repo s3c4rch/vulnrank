@@ -1,6 +1,21 @@
 from decimal import Decimal
 
+from ml_service.model_catalog import DEFAULT_MODEL_NAME
+from ml_service.model_runtime import ModelRuntimePrediction
+from ml_service.models import PriorityClass
 from ml_service.worker import process_delivery
+
+
+class StubRuntimeClient:
+    def __init__(self, priority: PriorityClass = PriorityClass.HIGH) -> None:
+        self.priority = priority
+
+    def predict_priority(self, model_tag: str, features: dict[str, float]) -> ModelRuntimePrediction:
+        return ModelRuntimePrediction(
+            predicted_priority=self.priority,
+            confidence=0.9,
+            reason=f"stubbed {model_tag}",
+        )
 
 
 def auth_header(token: str) -> dict[str, str]:
@@ -23,6 +38,26 @@ def login_user(client, email: str, password: str = "strong-pass-1") -> dict:
     )
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def request_and_approve_top_up(client, user_token: str, amount: str = "10.00") -> dict:
+    top_up_response = client.post(
+        "/balance/top-up",
+        headers=auth_header(user_token),
+        json={"amount": amount},
+    )
+    assert top_up_response.status_code == 200, top_up_response.text
+    assert top_up_response.json()["transaction"]["status"] == "pending"
+
+    admin_payload = login_user(client, "demo-admin@example.com", "demo-admin-password")
+    approve_response = client.post(
+        f"/admin/top-ups/{top_up_response.json()['transaction']['id']}/approve",
+        headers=auth_header(admin_payload["access_token"]),
+        json={"review_comment": "approved in task7 system test"},
+    )
+    assert approve_response.status_code == 200, approve_response.text
+    assert approve_response.json()["transaction"]["status"] == "approved"
+    return approve_response.json()
 
 
 def test_authentication_flow_supports_repeated_login_and_invalid_credentials(client):
@@ -53,19 +88,14 @@ def test_system_updates_balance_and_history_after_successful_prediction(
     assert initial_balance.status_code == 200
     assert Decimal(str(initial_balance.json()["amount"])) == Decimal("0.00")
 
-    top_up_response = client.post(
-        "/balance/top-up",
-        headers=auth_header(token),
-        json={"amount": "10.00"},
-    )
-    assert top_up_response.status_code == 200
-    assert Decimal(str(top_up_response.json()["balance"]["amount"])) == Decimal("10.00")
+    top_up_payload = request_and_approve_top_up(client, token, "10.00")
+    assert Decimal(str(top_up_payload["balance"]["amount"])) == Decimal("10.00")
 
     predict_response = client.post(
         "/predict",
         headers=auth_header(token),
         json={
-            "model": "demo_model",
+            "model": DEFAULT_MODEL_NAME,
             "features": {
                 "x1": 7.8,
                 "x2": 8.3,
@@ -79,6 +109,7 @@ def test_system_updates_balance_and_history_after_successful_prediction(
         body=published_messages[0].model_dump_json().encode("utf-8"),
         session_factory=session_factory,
         worker_id="worker-1",
+        runtime_client=StubRuntimeClient(),
     )
 
     task_response = client.get(f"/predict/{task_id}", headers=auth_header(token))
@@ -115,7 +146,7 @@ def test_system_blocks_insufficient_balance_and_skips_charge_on_worker_failure(
         "/predict",
         headers=auth_header(token),
         json={
-            "model": "demo_model",
+            "model": DEFAULT_MODEL_NAME,
             "features": {
                 "x1": 5.0,
                 "x2": 6.0,
@@ -125,18 +156,13 @@ def test_system_blocks_insufficient_balance_and_skips_charge_on_worker_failure(
     assert insufficient_balance.status_code == 402
     assert insufficient_balance.json()["error"]["code"] == "insufficient_balance"
 
-    top_up_response = client.post(
-        "/balance/top-up",
-        headers=auth_header(token),
-        json={"amount": "10.00"},
-    )
-    assert top_up_response.status_code == 200
+    request_and_approve_top_up(client, token, "10.00")
 
     predict_response = client.post(
         "/predict",
         headers=auth_header(token),
         json={
-            "model": "demo_model",
+            "model": DEFAULT_MODEL_NAME,
             "features": {
                 "x1": 4.5,
             },
@@ -149,6 +175,7 @@ def test_system_blocks_insufficient_balance_and_skips_charge_on_worker_failure(
         body=published_messages[0].model_dump_json().encode("utf-8"),
         session_factory=session_factory,
         worker_id="worker-2",
+        runtime_client=StubRuntimeClient(),
     )
 
     task_response = client.get(f"/predict/{task_id}", headers=auth_header(token))

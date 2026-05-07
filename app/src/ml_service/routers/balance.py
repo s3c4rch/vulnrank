@@ -23,11 +23,11 @@ def top_up_balance(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> BalanceOperationResponse:
-    transaction = BalanceService.top_up(
+    transaction = BalanceService.request_top_up(
         session,
         user_id=current_user.id,
         amount=payload.amount,
-        review_comment="balance top-up via api",
+        review_comment="top-up request via api",
     )
     updated_user = UserService.get_user(session, current_user.id)
     return BalanceOperationResponse(

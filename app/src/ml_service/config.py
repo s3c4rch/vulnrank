@@ -31,7 +31,17 @@ class Settings:
     rabbitmq_queue: str
     rabbitmq_connection_attempts: int
     rabbitmq_connection_delay: float
+    rabbitmq_heartbeat: int
     worker_id: str
+    ml_runtime_url: str
+    ml_runtime_timeout: float
+    ml_runtime_pull_timeout: float
+    ml_runtime_temperature: float
+    ml_runtime_context_length: int
+    ml_runtime_keep_alive: str | None
+    openai_base_url: str
+    openai_timeout: float
+    openai_default_model: str
 
     @property
     def database_url(self) -> str:
@@ -66,5 +76,15 @@ def get_settings() -> Settings:
         rabbitmq_queue=os.getenv("RABBITMQ_QUEUE", "ml_tasks"),
         rabbitmq_connection_attempts=int(os.getenv("RABBITMQ_CONNECTION_ATTEMPTS", "30")),
         rabbitmq_connection_delay=float(os.getenv("RABBITMQ_CONNECTION_DELAY", "1")),
+        rabbitmq_heartbeat=int(os.getenv("RABBITMQ_HEARTBEAT", "0")),
         worker_id=os.getenv("WORKER_ID", "worker-default"),
+        ml_runtime_url=os.getenv("ML_RUNTIME_URL", "http://ml-runtime:11434"),
+        ml_runtime_timeout=float(os.getenv("ML_RUNTIME_TIMEOUT", "60")),
+        ml_runtime_pull_timeout=float(os.getenv("ML_RUNTIME_PULL_TIMEOUT", "1800")),
+        ml_runtime_temperature=float(os.getenv("ML_RUNTIME_TEMPERATURE", "0.1")),
+        ml_runtime_context_length=int(os.getenv("ML_RUNTIME_CONTEXT_LENGTH", "4096")),
+        ml_runtime_keep_alive=os.getenv("ML_RUNTIME_KEEP_ALIVE"),
+        openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        openai_timeout=float(os.getenv("OPENAI_TIMEOUT", "90")),
+        openai_default_model=os.getenv("OPENAI_DEFAULT_MODEL", "gpt-5.4-mini"),
     )

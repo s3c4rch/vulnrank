@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from ml_service.init_db import initialize_database
+from ml_service.model_catalog import DEFAULT_MODEL_NAME
 from ml_service.services import MLModelService, PredictionService, UserService
 
 
@@ -29,11 +30,26 @@ def test_root_serves_web_interface(client):
     assert "/assets/app.js" in response.text
 
 
+def test_role_page_routes_serve_web_interface(client):
+    for path in ["/", "/register", "/login", "/cabinet", "/admin"]:
+        response = client.get(path)
+
+        assert response.status_code == 200
+        assert "text/html" in response.headers["content-type"]
+        assert "vulnrank Cabinet" in response.text
+        assert "/assets/app.js" in response.text
+
+
 def test_assets_are_served(client):
     response = client.get("/assets/app.js")
 
     assert response.status_code == 200
     assert "buildFeaturePayload" in response.text
+
+    styles_response = client.get("/assets/styles.css")
+    assert styles_response.status_code == 200
+    assert "[hidden]" in styles_response.text
+    assert "display: none !important" in styles_response.text
 
 
 def test_models_endpoint_returns_active_models_for_authenticated_user(client):
@@ -42,7 +58,9 @@ def test_models_endpoint_returns_active_models_for_authenticated_user(client):
     response = client.get("/models", headers=auth_header(payload["access_token"]))
 
     assert response.status_code == 200
-    assert {item["name"] for item in response.json()["items"]} >= {"demo_model", "priority-classifier"}
+    model_names = {item["name"] for item in response.json()["items"]}
+    assert model_names == {DEFAULT_MODEL_NAME}
+    assert "demo_model" not in model_names
 
 
 def test_admin_endpoints_require_admin_role(client):
@@ -86,14 +104,14 @@ def test_admin_can_view_failed_prediction_tasks(client, session_factory):
             password_hash="ui-password-hash",
             initial_balance=Decimal("5.00"),
         )
-        model = MLModelService.get_active_model_by_name(session, "demo_model")
+        model = MLModelService.get_active_model_by_name(session, DEFAULT_MODEL_NAME)
         PredictionService.create_queued_task(
             session,
             user_id=user.id,
             model_id=model.id,
             input_payload={
                 "task_id": "failed-admin-task",
-                "model": "demo_model",
+                "model": DEFAULT_MODEL_NAME,
                 "features": {"x1": 1.0},
                 "timestamp": "2026-01-01T12:00:00Z",
             },

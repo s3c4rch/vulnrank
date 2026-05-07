@@ -9,6 +9,7 @@ from ml_service.broker import RabbitMQTaskPublisher
 from ml_service.database import get_session_factory
 from ml_service.errors import register_exception_handlers
 from ml_service.lifespan import create_lifespan
+from ml_service.model_runtime import OllamaModelRuntimeClient
 from ml_service.routers import register_routers
 from ml_service.schemas import ErrorResponse
 from ml_service.web import register_web_routes
@@ -18,6 +19,7 @@ def create_app(
     session_factory: sessionmaker | None = None,
     initialize_on_startup: bool = True,
     task_publisher: Any | None = None,
+    model_runtime_client: Any | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="ML Service REST API",
@@ -35,6 +37,7 @@ def create_app(
     )
     app.state.session_factory = session_factory or get_session_factory()
     app.state.task_publisher = task_publisher or RabbitMQTaskPublisher()
+    app.state.model_runtime_client = model_runtime_client or OllamaModelRuntimeClient()
 
     register_exception_handlers(app)
     register_routers(app)

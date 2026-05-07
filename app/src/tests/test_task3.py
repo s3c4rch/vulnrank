@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import func, select
 
 from ml_service.init_db import initialize_database
+from ml_service.model_catalog import MODEL_SEEDS
 from ml_service.models import MLModel, MLTask, PriorityClass, Transaction, TransactionType, User, utcnow
 from ml_service.services import (
     BalanceService,
@@ -119,6 +120,6 @@ def test_database_initialization_is_idempotent(session_factory):
         task_count = session.scalar(select(func.count()).select_from(MLTask))
 
     assert user_count == 2
-    assert model_count == 3
+    assert model_count == len(MODEL_SEEDS)
     assert transaction_count == 2
     assert task_count == 0

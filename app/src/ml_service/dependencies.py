@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from ml_service.broker import RabbitMQTaskPublisher
 from ml_service.database import get_db_session
 from ml_service.errors import ApiError
+from ml_service.model_runtime import OllamaModelRuntimeClient
 from ml_service.models import User, UserRole
 from ml_service.services import AuthService
 
@@ -16,6 +17,10 @@ auth_scheme = HTTPBearer(auto_error=False)
 
 def get_task_publisher(request: Request) -> RabbitMQTaskPublisher:
     return request.app.state.task_publisher
+
+
+def get_model_runtime_client(request: Request) -> OllamaModelRuntimeClient:
+    return request.app.state.model_runtime_client
 
 
 def get_current_user(

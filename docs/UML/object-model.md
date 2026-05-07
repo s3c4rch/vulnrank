@@ -5,6 +5,10 @@ enum UserRole {
   ADMIN
 }
 
+enum ExternalProvider {
+  OPENAI
+}
+
 ### ml
 enum MLTaskStatus {
   CREATED
@@ -37,160 +41,117 @@ enum TransactionStatus {
 
 ## classes & methods
 ### users
-abstract class User {
+class User {
   - id: UUID
   - email: string
   - passwordHash: string
   - role: UserRole
-  - balance: CreditBalance
   - createdAt: DateTime
+
+  + getBalance(): Balance
+  + getTasks(): List<MLTask>
+  + getTransactions(): List<Transaction>
 }
 
-class ClientUser extends User {
-  - requestHistory: MLRequestHistory
+class AuthSession {
+  - id: UUID
+  - userId: UUID
+  - token: string
+  - createdAt: DateTime
 
-  + submitTask(model: MLModel, inputData: List<FindingRecord>): MLTask
-  + requestTopUp(amount: decimal): TopUpTransaction
-  + getRequestHistory(): MLRequestHistory
+  + isActive(): boolean
 }
 
-class AdminUser extends User {
-  + approveTopUp(transaction: TopUpTransaction): void
-  + rejectTopUp(transaction: TopUpTransaction, reason: string): void
-  + viewUserTransactions(userId: UUID): List<Transaction>
+class UserExternalModelCredential {
+  - id: UUID
+  - userId: UUID
+  - provider: ExternalProvider
+  - apiKey: string
+  - modelName: string
+  - isEnabled: boolean
+  - createdAt: DateTime
+  - updatedAt: DateTime
+
+  + enable(): void
+  + disable(): void
+  + updateModel(modelName: string): void
 }
 
 ### ml
-abstract class MLModel {
+class MLModel {
   - id: UUID
   - name: string
   - version: string
   - description: string
   - costPerPrediction: decimal
   - isActive: boolean
+  - createdAt: DateTime
 
+  + activate(): void
+  + deactivate(): void
   + getCostPerPrediction(): decimal
-  + predict(records: List<FindingRecord>): PredictionResult
-}
-
-class PriorityClassificationModel extends MLModel {
-  + predict(records: List<FindingRecord>): PredictionResult
-}
-
-class FindingRecord {
-  - recordId: string
-  - payload: Map<string, string | number | boolean>
-
-  + getRecordId(): string
-  + getValue(fieldName: string): string
 }
 
 class MLTask {
   - id: UUID
-  - inputData: List<FindingRecord>
+  - userId: UUID
+  - modelId: UUID
   - status: MLTaskStatus
-  - user: ClientUser
-  - model: MLModel
-  - validationErrors: List<ValidationError>
-  - result: PredictionResult?
-  - failureReason: string?
+  - inputPayload: JSON
+  - spentCredits: decimal
+  - errorMessage: string?
   - createdAt: DateTime
-  - startedAt: DateTime?
   - finishedAt: DateTime?
 
-  + start(): void
-  + addValidationError(error: ValidationError): void
-  + complete(result: PredictionResult): void
+  + startValidation(): void
+  + startProcessing(): void
+  + complete(): void
   + fail(reason: string): void
-  + isBillable(): boolean
-}
-
-class ValidationError {
-  - recordId: string
-  - fieldName: string
-  - message: string
-  - rejectedValue: string
-
-  + toMessage(): string
+  + hasResult(): boolean
 }
 
 class PredictionResult {
   - id: UUID
   - taskId: UUID
-  - predictions: List<PredictionItem>
+  - predictedPriority: PriorityClass
+  - predictionValue: float?
+  - confidence: float
   - processedCount: integer
   - rejectedCount: integer
   - spentCredits: decimal
+  - workerId: string?
   - createdAt: DateTime
 
-  + calculateSpentCredits(costPerPrediction: decimal): decimal
   + hasSuccessfulPredictions(): boolean
-}
-
-class PredictionItem {
-  - recordId: string
-  - predictedPriority: PriorityClass
-  - confidence: float
-
-  + getPredictedPriority(): PriorityClass
+  + getProcessedCount(): integer
+  + getRejectedCount(): integer
 }
 
 ### balance & transactions
-class CreditBalance {
+class Balance {
   - id: UUID
-  - user: User
+  - userId: UUID
   - amount: decimal
+  - updatedAt: DateTime
 
-  + getAmount(): decimal
   + canAfford(amount: decimal): boolean
   + increase(amount: decimal): void
   + decrease(amount: decimal): void
 }
 
-abstract class Transaction {
+class Transaction {
   - id: UUID
+  - userId: UUID
+  - taskId: UUID?
   - type: TransactionType
-  - amount: decimal
   - status: TransactionStatus
-  - user: User
-  - relatedTask: MLTask?
-  - createdAt: DateTime
-
-  + applyTo(user: User): void
-  + cancel(reason: string): void
-}
-
-class TopUpTransaction extends Transaction {
-  - reviewedBy: AdminUser?
-  - reviewedAt: DateTime?
+  - amount: decimal
   - reviewComment: string?
-
-  + approve(admin: AdminUser): void
-  + reject(admin: AdminUser, reason: string): void
-  + applyTo(user: User): void
-}
-
-class PredictionChargeTransaction extends Transaction {
-  + applyTo(user: User): void
-}
-
-### history
-class MLRequestHistory {
-  - owner: ClientUser
-  - entries: List<RequestHistoryEntry>
-
-  + append(entry: RequestHistoryEntry): void
-  + getEntries(): List<RequestHistoryEntry>
-  + getSuccessfulEntries(): List<RequestHistoryEntry>
-}
-
-class RequestHistoryEntry {
-  - task: MLTask
-  - result: PredictionResult?
-  - chargeTransaction: PredictionChargeTransaction?
   - createdAt: DateTime
 
-  + isSuccessful(): boolean
+  + approve(): void
+  + reject(reason: string): void
+  + complete(): void
 }
 
 ---

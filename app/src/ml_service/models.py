@@ -38,6 +38,10 @@ class PriorityClass(str, Enum):
     HIGH = "high"
 
 
+class ExternalProvider(str, Enum):
+    OPENAI = "openai"
+
+
 class TransactionType(str, Enum):
     TOP_UP = "top_up"
     PREDICTION_CHARGE = "prediction_charge"
@@ -73,6 +77,10 @@ class User(Base):
         cascade="all, delete-orphan",
     )
     tasks: Mapped[list["MLTask"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    external_model_credentials: Mapped[list["UserExternalModelCredential"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
     )
@@ -169,3 +177,19 @@ class AuthSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     user: Mapped[User] = relationship(back_populates="auth_sessions")
+
+
+class UserExternalModelCredential(Base):
+    __tablename__ = "user_external_model_credentials"
+    __table_args__ = (UniqueConstraint("user_id", "provider", name="uq_user_external_provider"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    provider: Mapped[ExternalProvider] = mapped_column(SqlEnum(ExternalProvider), nullable=False)
+    api_key: Mapped[str] = mapped_column(Text, nullable=False)
+    model_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    user: Mapped[User] = relationship(back_populates="external_model_credentials")

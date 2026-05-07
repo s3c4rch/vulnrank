@@ -5,9 +5,10 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 from ml_service.database import create_schema, get_engine, get_session_factory
+from ml_service.model_catalog import MODEL_SEEDS, OLLAMA_MODEL_VERSION
 from ml_service.models import MLModel, Transaction, TransactionType, User, UserRole
 from ml_service.security import hash_password
-from ml_service.services import BalanceService, MLModelService, UserService
+from ml_service.services import BalanceService, MLModelService, UserService, normalize_model_cost
 
 
 DEMO_USERS = (
@@ -26,28 +27,6 @@ DEMO_USERS = (
         "seed_marker": "seed:demo-admin:balance",
     },
 )
-
-DEMO_MODELS = (
-    {
-        "name": "demo_model",
-        "version": "1.0",
-        "description": "Task 5 demo model for RabbitMQ worker processing",
-        "cost_per_prediction": Decimal("2.50"),
-    },
-    {
-        "name": "priority-classifier",
-        "version": "1.0",
-        "description": "Demo security finding priority classifier",
-        "cost_per_prediction": Decimal("2.50"),
-    },
-    {
-        "name": "priority-classifier",
-        "version": "1.1",
-        "description": "Updated demo security finding priority classifier",
-        "cost_per_prediction": Decimal("3.00"),
-    },
-)
-
 
 def initialize_database(
     engine: Engine | None = None,
@@ -95,7 +74,7 @@ def initialize_database(
                     review_comment=demo_user["seed_marker"],
                 )
 
-        for demo_model in DEMO_MODELS:
+        for demo_model in MODEL_SEEDS:
             existing_model = session.scalar(
                 select(MLModel).where(
                     MLModel.name == demo_model["name"],
@@ -104,3 +83,13 @@ def initialize_database(
             )
             if existing_model is None:
                 MLModelService.create_model(session, **demo_model)
+            else:
+                existing_model.description = demo_model["description"]
+                existing_model.cost_per_prediction = normalize_model_cost(
+                    demo_model["cost_per_prediction"]
+                )
+                if existing_model.version != OLLAMA_MODEL_VERSION:
+                    existing_model.is_active = bool(demo_model.get("is_active", True))
+                session.commit()
+
+        MLModelService.ensure_single_active_ollama_model(session)

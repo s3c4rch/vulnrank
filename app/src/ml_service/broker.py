@@ -4,7 +4,7 @@ from time import sleep
 from typing import Any
 
 from ml_service.config import Settings, get_settings
-from ml_service.schemas import PredictionTaskMessage
+from ml_service.schemas import PredictionTaskMessage, ScanUploadTaskMessage
 
 
 class RabbitMQPublishError(Exception):
@@ -25,6 +25,7 @@ def create_rabbitmq_connection(settings: Settings | None = None) -> Any:
         host=resolved_settings.rabbitmq_host,
         port=resolved_settings.rabbitmq_port,
         credentials=credentials,
+        heartbeat=resolved_settings.rabbitmq_heartbeat,
     )
 
     last_error: Exception | None = None
@@ -45,7 +46,7 @@ class RabbitMQTaskPublisher:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
 
-    def publish(self, message: PredictionTaskMessage) -> None:
+    def publish(self, message: PredictionTaskMessage | ScanUploadTaskMessage) -> None:
         try:
             import pika
 

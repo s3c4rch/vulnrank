@@ -14,8 +14,8 @@ router = APIRouter(tags=["models"])
 
 @router.get("/models", response_model=ModelListResponse)
 def get_models(
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> ModelListResponse:
-    models = MLModelService.get_active_models(session)
+    models = MLModelService.get_available_models_for_user(session, current_user.id)
     return ModelListResponse(items=[serialize_model(model) for model in models])

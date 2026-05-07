@@ -16,3 +16,19 @@ def register_web_routes(app: FastAPI) -> None:
     @app.get("/", include_in_schema=False)
     def web_index() -> FileResponse:
         return FileResponse(WEB_STATIC_DIR / "index.html")
+
+    @app.get("/register", include_in_schema=False)
+    def web_register() -> FileResponse:
+        return FileResponse(WEB_STATIC_DIR / "index.html")
+
+    @app.get("/login", include_in_schema=False)
+    def web_login() -> FileResponse:
+        return FileResponse(WEB_STATIC_DIR / "index.html")
+
+    @app.get("/cabinet", include_in_schema=False)
+    def web_cabinet() -> FileResponse:
+        return FileResponse(WEB_STATIC_DIR / "index.html")
+
+    @app.get("/admin", include_in_schema=False)
+    def web_admin() -> FileResponse:
+        return FileResponse(WEB_STATIC_DIR / "index.html")
